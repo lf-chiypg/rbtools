@@ -16,7 +16,7 @@ from rbtools.utils.filesystem import load_config
 GLOBAL_OPTIONS = [
     Option('-v', '--version',
            action='version',
-           version='RBTools %s' % get_version_string()),
+           version='RBTools LF %s' % get_version_string()),
     Option('-h', '--help',
            action='store_true',
            dest='help',
