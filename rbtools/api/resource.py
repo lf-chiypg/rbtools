@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import re
+from collections import defaultdict, deque
 
 import six
 from pkg_resources import parse_version
@@ -10,12 +11,22 @@ from six.moves.urllib.parse import urljoin
 from rbtools.api.cache import MINIMUM_VERSION
 from rbtools.api.decorators import request_method_decorator
 from rbtools.api.request import HttpRequest
+from rbtools.utils.graphs import path_exists
 
 
 RESOURCE_MAP = {}
 LINKS_TOK = 'links'
 LINK_KEYS = set(['href', 'method', 'title'])
 _EXCLUDE_ATTRS = [LINKS_TOK, 'stat']
+
+
+def resource_mimetype(mimetype):
+    """Set the mimetype for the decorated class in the resource map."""
+    def wrapper(cls):
+        RESOURCE_MAP[mimetype] = cls
+        return cls
+
+    return wrapper
 
 
 @request_method_decorator
@@ -237,8 +248,8 @@ class ResourceLinkField(ResourceDictField):
         self._transport = resource._transport
 
     @request_method_decorator
-    def get(self):
-        return HttpRequest(self._fields['href'])
+    def get(self, **query_args):
+        return HttpRequest(self._fields['href'], query_args=query_args)
 
 
 class ResourceListField(list):
@@ -436,6 +447,26 @@ class ListResource(Resource):
         return HttpRequest(urljoin(self._url, '%s/' % pk),
                            query_args=kwargs)
 
+    @property
+    def all_pages(self):
+        """Yield all pages of item resources.
+
+        Each page of resources is itself an instance of the same
+        ``ListResource`` class.
+        """
+        page = self
+
+        while True:
+            yield page
+            page = page.get_next()
+
+    @property
+    def all_items(self):
+        """Yield all item resources in all pages of this resource."""
+        for page in self.all_pages:
+            for item in page:
+                yield item
+
     def __repr__(self):
         return ('%s(transport=%r, payload=%r, url=%r, token=%r, '
                 'item_mime_type=%r)' % (self.__class__.__name__,
@@ -446,6 +477,7 @@ class ListResource(Resource):
                                         self._item_mime_type))
 
 
+@resource_mimetype('application/vnd.reviewboard.org.root')
 class RootResource(ItemResource):
     """The Root resource specific base class.
 
@@ -497,25 +529,18 @@ class RootResource(ItemResource):
         url = self._TEMPLATE_PARAM_RE.sub(get_template_value, url_template)
         return HttpRequest(url, query_args=kwargs)
 
-RESOURCE_MAP['application/vnd.reviewboard.org.root'] = RootResource
 
+class DiffUploaderMixin(object):
+    """A mixin for uploading diffs to a resource."""
 
-class DiffListResource(ListResource):
-    """The Diff List resource specific base class.
+    def prepare_upload_diff_request(self, diff, parent_diff=None,
+                                    base_dir=None, base_commit_id=None,
+                                    **kwargs):
+        """Create a request that can be used to upload a diff.
 
-    Provides additional functionality to assist in the uploading of
-    new diffs.
-    """
-    @request_method_decorator
-    def upload_diff(self, diff, parent_diff=None, base_dir=None,
-                    base_commit_id=None, **kwargs):
-        """Uploads a new diff.
-
-        The diff and parent_diff arguments should be strings containing
-        the diff output.
+        The diff and parent_diff arguments should be strings containing the
+        diff output.
         """
-        # TODO: This method should be unified with validate_diff() method of
-        # ValidateDiffResource, since they both perform the same operation.
         request = HttpRequest(self._url, method=b'POST', query_args=kwargs)
         request.add_file('path', 'diff', diff)
 
@@ -530,9 +555,32 @@ class DiffListResource(ListResource):
 
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.diffs'] = DiffListResource
+
+@resource_mimetype('application/vnd.reviewboard.org.diffs')
+class DiffListResource(DiffUploaderMixin, ListResource):
+    """The Diff List resource specific base class.
+
+    This resource provides functionality to assist in the uploading of new
+    diffs.
+    """
+
+    @request_method_decorator
+    def upload_diff(self, diff, parent_diff=None, base_dir=None,
+                    base_commit_id=None, **kwargs):
+        """Upload a diff to the resource.
+
+        The diff and parent_diff arguments should be strings containing the
+        diff output.
+        """
+        return self.prepare_upload_diff_request(
+            diff,
+            parent_diff=parent_diff,
+            base_dir=base_dir,
+            base_commit_id=base_commit_id,
+            **kwargs)
 
 
+@resource_mimetype('application/vnd.reviewboard.org.diff')
 class DiffResource(ItemResource):
     """The Diff resource specific base class.
 
@@ -546,9 +594,8 @@ class DiffResource(ItemResource):
         request.headers['Accept'] = 'text/x-patch'
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.diff'] = DiffResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.file')
 class FileDiffResource(ItemResource):
     """The File Diff resource specific base class."""
     @request_method_decorator
@@ -566,9 +613,8 @@ class FileDiffResource(ItemResource):
             'application/vnd.reviewboard.org.diff.data+json'
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.file'] = FileDiffResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.file-attachments')
 class FileAttachmentListResource(ListResource):
     """The File Attachment List resource specific base class."""
     @request_method_decorator
@@ -586,18 +632,14 @@ class FileAttachmentListResource(ListResource):
 
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.file-attachments'] = \
-    FileAttachmentListResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.draft-file-attachments')
 class DraftFileAttachmentListResource(FileAttachmentListResource):
     """The Draft File Attachment List resource specific base class."""
     pass
 
-RESOURCE_MAP['application/vnd.reviewboard.org.draft-file-attachments'] = \
-    DraftFileAttachmentListResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.screenshots')
 class ScreenshotListResource(ListResource):
     """The Screenshot List resource specific base class."""
     @request_method_decorator
@@ -615,18 +657,14 @@ class ScreenshotListResource(ListResource):
 
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.screenshots'] = \
-    ScreenshotListResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.draft-screenshots')
 class DraftScreenshotListResource(ScreenshotListResource):
     """The Draft Screenshot List resource specific base class."""
     pass
 
-RESOURCE_MAP['application/vnd.reviewboard.org.draft-screenshots'] = \
-    DraftScreenshotListResource
 
-
+@resource_mimetype('application/vnd.reviewboard.org.review-request')
 class ReviewRequestResource(ItemResource):
     """The Review Request resource specific base class."""
 
@@ -680,40 +718,92 @@ class ReviewRequestResource(ItemResource):
 
         return request
 
-RESOURCE_MAP['application/vnd.reviewboard.org.review-request'] = \
-    ReviewRequestResource
+    def build_dependency_graph(self):
+        """Build the dependency graph for the review request.
+
+        Only review requests in the same repository as this one will be in the
+        graph.
+
+        A ValueError is raised if the graph would contain cycles.
+        """
+        def get_url(resource):
+            """Get the URL of the resource."""
+            if hasattr(resource, 'href'):
+                return resource.href
+            else:
+                return resource.absolute_url
+
+        # Even with the API cache, we don't want to be making more requests
+        # than necessary. The review request resource will be cached by an
+        # ETag, so there will still be a round trip if we don't cache them
+        # here.
+        review_requests_by_url = {}
+        review_requests_by_url[self.absolute_url] = self
+
+        def get_review_request_resource(resource):
+            url = get_url(resource)
+
+            if url not in review_requests_by_url:
+                review_requests_by_url[url] = resource.get(expand='repository')
+
+            return review_requests_by_url[url]
+
+        repository = self.get_repository()
+
+        graph = defaultdict(set)
+
+        visited = set()
+
+        unvisited = deque()
+        unvisited.append(self)
+
+        while unvisited:
+            head = unvisited.popleft()
+
+            if head in visited:
+                continue
+
+            visited.add(get_url(head))
+
+            for tail in head.depends_on:
+                tail = get_review_request_resource(tail)
+
+                if path_exists(graph, tail.id, head.id):
+                    raise ValueError('Circular dependencies.')
+
+                # We don't want to include review requests for other
+                # repositories, so we'll stop if we reach one. We also don't
+                # want to re-land submitted review requests.
+                if (repository.id == tail.repository.id and
+                    tail.status != 'submitted'):
+                    graph[head].add(tail)
+                    unvisited.append(tail)
+
+        graph.default_factory = None
+        return graph
 
 
-class ValidateDiffResource(ItemResource):
+@resource_mimetype('application/vnd.reviewboard.org.diff-validation')
+class ValidateDiffResource(DiffUploaderMixin, ItemResource):
     """The Validate Diff resource specific base class.
 
     Provides additional functionality to assist in the validation of diffs.
     """
+
     @request_method_decorator
-    def validate_diff(self, repository, diff, parent_diff=None,
-                      base_dir=None, base_commit_id=None, **kwargs):
-        """Validates a diff.
+    def validate_diff(self, repository, diff, parent_diff=None, base_dir=None,
+                      base_commit_id=None, **kwargs):
+        """Validate a diff."""
+        request = self.prepare_upload_diff_request(
+            diff,
+            parent_diff=parent_diff,
+            base_dir=base_dir,
+            base_commit_id=base_commit_id,
+            **kwargs)
 
-        The diff and parent_diff arguments should be strings containing
-        the diff output.
-        """
-
-        # TODO: This method should be unified with upload_diff() method of
-        # DiffListResource, since they both perform the same operation.
-        request = HttpRequest(self._url, method=b'POST', query_args=kwargs)
         request.add_field('repository', repository)
-        request.add_file('path', 'diff', diff)
-
-        if parent_diff:
-            request.add_file('parent_diff_path', 'parent_diff', parent_diff)
-
-        if base_dir:
-            request.add_field('basedir', base_dir)
 
         if base_commit_id:
             request.add_field('base_commit_id', base_commit_id)
 
         return request
-
-RESOURCE_MAP['application/vnd.reviewboard.org.diff-validation'] = \
-    ValidateDiffResource

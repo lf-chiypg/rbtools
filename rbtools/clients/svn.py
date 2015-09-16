@@ -57,7 +57,13 @@ class SVNClient(SCMClient):
     def __init__(self, **kwargs):
         super(SVNClient, self).__init__(**kwargs)
 
+        self._svn_info_cache = {}
+        self._svn_repository_info_cache = None
+
     def get_repository_info(self):
+        if self._svn_repository_info_cache:
+            return self._svn_repository_info_cache
+
         if not check_install(['svn', 'help']):
             logging.debug('Unable to execute "svn help": skipping SVN')
             return None
@@ -107,7 +113,11 @@ class SVNClient(SCMClient):
         else:
             self.subversion_client_version = tuple(map(int, m.groups()))
 
-        return SVNRepositoryInfo(path, base_path, uuid)
+        self._svn_repository_info_cache = SVNRepositoryInfo(path,
+                                                            base_path,
+                                                            uuid)
+
+        return self._svn_repository_info_cache
 
     def parse_revision_spec(self, revisions=[]):
         """Parses the given revision spec.
@@ -642,8 +652,6 @@ class SVNClient(SCMClient):
 
     def svn_info(self, path, ignore_errors=False):
         """Return a dict which is the result of 'svn info' at a given path."""
-        svninfo = {}
-
         # SVN's internal path recognizers think that any file path that
         # includes an '@' character will be path@rev, and skips everything that
         # comes after the '@'. This makes it hard to do operations on files
@@ -651,21 +659,26 @@ class SVNClient(SCMClient):
         if b'@' in path and not path[-1] == b'@':
             path += b'@'
 
-        result = self._run_svn([b"info", path],
-                               split_lines=True,
-                               ignore_errors=ignore_errors,
-                               none_on_ignored_error=True,
-                               results_unicode=False)
-        if result is None:
-            return None
+        if path not in self._svn_info_cache:
+            result = self._run_svn([b"info", path],
+                                   split_lines=True,
+                                   ignore_errors=ignore_errors,
+                                   none_on_ignored_error=True,
+                                   results_unicode=False)
+            if result is None:
+                self._svn_info_cache[path] = None
+            else:
+                svninfo = {}
 
-        for info in result:
-            parts = info.strip().split(b': ', 1)
-            if len(parts) == 2:
-                key, value = parts
-                svninfo[key] = value
+                for info in result:
+                    parts = info.strip().split(b': ', 1)
+                    if len(parts) == 2:
+                        key, value = parts
+                        svninfo[key] = value
 
-        return svninfo
+                self._svn_info_cache[path] = svninfo
+
+        return self._svn_info_cache[path]
 
     # Adapted from server code parser.py
     def parse_filename_header(self, s):
@@ -940,17 +953,11 @@ class SVNRepositoryInfo(RepositoryInfo):
         get a different SVNRepositoryInfo object (with a different path).
         """
         # Reduce list of repositories to only SVN ones.
-        repositories = []
-        page_repositories = server.get_repositories()
-        try:
-            while True:
-                for repository in page_repositories:
-                    # Ignore non-SVN repositories
-                    if repository['tool'] == 'Subversion':
-                        repositories.append(repository)
-                page_repositories = page_repositories.get_next()
-        except StopIteration:
-            pass
+        repositories = [
+            repository
+            for repository in server.get_repositories().all_items
+            if repository['tool'] == 'Subversion'
+        ]
 
         # Do two paths. The first will be to try to find a matching entry
         # by path/mirror path. If we don't find anything, then the second will
