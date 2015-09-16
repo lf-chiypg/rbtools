@@ -1,4 +1,4 @@
-from __future__ import print_function, unicode_literals
+from __future__ import print_function#, unicode_literals
 
 from rbtools.clients.errors import InvalidRevisionSpecError
 from rbtools.commands import Command, CommandError

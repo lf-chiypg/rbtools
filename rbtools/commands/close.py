@@ -1,4 +1,4 @@
-from __future__ import print_function, unicode_literals
+from __future__ import print_function#, unicode_literals
 
 from rbtools.commands import Command, CommandError, Option
 from rbtools.utils.commands import get_review_request

@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+#from __future__ import unicode_literals
 
 from rbtools.api.resource import (CountResource, ItemResource,
                                   ListResource, RESOURCE_MAP)

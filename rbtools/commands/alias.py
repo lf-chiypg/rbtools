@@ -1,4 +1,4 @@
-from __future__ import print_function, unicode_literals
+from __future__ import print_function#, unicode_literals
 
 from collections import defaultdict
 from subprocess import list2cmdline

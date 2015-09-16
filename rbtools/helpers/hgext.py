@@ -1,4 +1,4 @@
-from __future__ import unicode_literals
+#from __future__ import unicode_literals
 
 
 # This file provides a Mercurial extension that resets certain
