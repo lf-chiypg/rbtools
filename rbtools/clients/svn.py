@@ -350,11 +350,11 @@ class SVNClient(SCMClient):
 
         diff = self._run_svn(diff_cmd, split_lines=True, results_unicode=False,
                              log_output_on_error=False)
-        diff = self.handle_renames(diff)
+        diff = self.handle_renames(diff, tip)
 
         if self.supports_empty_files():
-            diff = self._handle_empty_files(diff, diff_cmd,
-                                            empty_files_revisions)
+           diff = self._handle_empty_files(diff, diff_cmd,
+                                            empty_files_revisions, tip)
 
         diff = self.convert_to_absolute_paths(diff, repository_info)
 
@@ -451,7 +451,7 @@ class SVNClient(SCMClient):
 
         return None
 
-    def handle_renames(self, diff_content):
+    def handle_renames(self, diff_content, to_revision='0'):
         """
         The output of svn diff is incorrect when the file in question came
         into being via svn mv/cp. Although the patch for these files are
@@ -463,19 +463,21 @@ class SVNClient(SCMClient):
         # svn diff against a repository URL on two revisions appears to
         # handle moved files properly, so only adjust the diff file names
         # if they were created using a working copy.
-        if self.options.repository_url:
-            return diff_content
+        #
+        # always parse the diff for revision nubmer nonexistent
+        # if self.options.repository_url:
+        #    return diff_content
 
         result = []
 
         from_line = to_line = None
         for line in diff_content:
             if self.DIFF_ORIG_FILE_LINE_RE.match(line):
-                from_line = line
+                from_line = line.replace('nonexistent', 'revision 0')
                 continue
 
             if self.DIFF_NEW_FILE_LINE_RE.match(line):
-                to_line = line
+                to_line = line.replace('nonexistent', 'revision %s' % to_revision)
                 continue
 
             # This is where we decide how mangle the previous '--- '
@@ -506,7 +508,7 @@ class SVNClient(SCMClient):
 
         return result
 
-    def _handle_empty_files(self, diff_content, diff_cmd, revisions):
+    def _handle_empty_files(self, diff_content, diff_cmd, revisions, to_revision='0'):
         """Handles added and deleted 0-length files in the diff output.
 
         Since the diff output from svn diff does not give enough context for
@@ -532,6 +534,7 @@ class SVNClient(SCMClient):
 
         if not diff_with_deleted:
             return diff_content
+        diff_with_deleted = ''.join(self.handle_renames(diff_with_deleted, to_revision))
 
         deleted_files = re.findall(br'^Index:\s+(\S+)\s+\(deleted\)$',
                                    diff_with_deleted, re.M)
